@@ -1,0 +1,1 @@
+smoothest --mask=/Users/xiaoqianxiao/PycharmProjects/vicarious_fear_extinction/test_third_level/data/mask.nii.gz --zstat=/Users/xiaoqianxiao/PycharmProjects/vicarious_fear_extinction/test_third_level/work/test_wf_3rd_level/flameo/stats/zstat1.nii.gz

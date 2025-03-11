@@ -1,0 +1,65 @@
+[
+    {
+        "group": 1,
+        "imports": [],
+        "name": "0_design_gen",
+        "size": 1
+    },
+    {
+        "group": 1,
+        "imports": [],
+        "name": "1_merge_copes",
+        "size": 1
+    },
+    {
+        "group": 1,
+        "imports": [],
+        "name": "2_merge_varcopes",
+        "size": 1
+    },
+    {
+        "group": 1,
+        "imports": [
+            "1_merge_copes",
+            "0_design_gen"
+        ],
+        "name": "3_randomise",
+        "size": 1
+    },
+    {
+        "group": 1,
+        "imports": [
+            "1_merge_copes",
+            "2_merge_varcopes",
+            "0_design_gen"
+        ],
+        "name": "4_flameo",
+        "size": 1
+    },
+    {
+        "group": 1,
+        "imports": [
+            "4_flameo"
+        ],
+        "name": "5_smooth_est",
+        "size": 1
+    },
+    {
+        "group": 1,
+        "imports": [
+            "4_flameo"
+        ],
+        "name": "6_datasink",
+        "size": 1
+    },
+    {
+        "group": 1,
+        "imports": [
+            "4_flameo",
+            "1_merge_copes",
+            "5_smooth_est"
+        ],
+        "name": "7_cluster",
+        "size": 1
+    }
+]

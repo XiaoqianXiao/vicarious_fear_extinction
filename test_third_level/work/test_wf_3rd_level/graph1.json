@@ -1,0 +1,121 @@
+{
+    "groups": [
+        {
+            "name": "Group_00001",
+            "procs": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+            ],
+            "total": 8
+        }
+    ],
+    "links": [
+        {
+            "source": 1,
+            "target": 4,
+            "value": 1
+        },
+        {
+            "source": 2,
+            "target": 4,
+            "value": 1
+        },
+        {
+            "source": 0,
+            "target": 4,
+            "value": 1
+        },
+        {
+            "source": 4,
+            "target": 5,
+            "value": 1
+        },
+        {
+            "source": 4,
+            "target": 6,
+            "value": 1
+        },
+        {
+            "source": 4,
+            "target": 7,
+            "value": 1
+        },
+        {
+            "source": 1,
+            "target": 7,
+            "value": 1
+        },
+        {
+            "source": 5,
+            "target": 7,
+            "value": 1
+        },
+        {
+            "source": 1,
+            "target": 3,
+            "value": 1
+        },
+        {
+            "source": 0,
+            "target": 3,
+            "value": 1
+        }
+    ],
+    "maxN": 8,
+    "nodes": [
+        {
+            "group": 1,
+            "name": "0_design_gen",
+            "report": "/design_gen/_report/report.rst",
+            "result": "/design_gen/result_design_gen.pklz"
+        },
+        {
+            "group": 1,
+            "name": "1_merge_copes",
+            "report": "/merge_copes/_report/report.rst",
+            "result": "/merge_copes/result_merge_copes.pklz"
+        },
+        {
+            "group": 1,
+            "name": "2_merge_varcopes",
+            "report": "/merge_varcopes/_report/report.rst",
+            "result": "/merge_varcopes/result_merge_varcopes.pklz"
+        },
+        {
+            "group": 1,
+            "name": "3_randomise",
+            "report": "/randomise/_report/report.rst",
+            "result": "/randomise/result_randomise.pklz"
+        },
+        {
+            "group": 1,
+            "name": "4_flameo",
+            "report": "/flameo/_report/report.rst",
+            "result": "/flameo/result_flameo.pklz"
+        },
+        {
+            "group": 1,
+            "name": "5_smooth_est",
+            "report": "/smooth_est/_report/report.rst",
+            "result": "/smooth_est/result_smooth_est.pklz"
+        },
+        {
+            "group": 1,
+            "name": "6_datasink",
+            "report": "/datasink/_report/report.rst",
+            "result": "/datasink/result_datasink.pklz"
+        },
+        {
+            "group": 1,
+            "name": "7_cluster",
+            "report": "/cluster/_report/report.rst",
+            "result": "/cluster/result_cluster.pklz"
+        }
+    ]
+}
