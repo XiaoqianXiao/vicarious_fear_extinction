@@ -14,7 +14,6 @@ plugin_settings = {
     'plugin': 'MultiProc',
     'plugin_args': {
         'n_procs': 4,
-        ''
         'raise_insufficient': False,
         'maxtasksperchild': 1,
     }
@@ -28,7 +27,7 @@ bids_dir = data_dir
 derivatives_dir = os.path.join(data_dir, 'derivatives')
 fmriprep_folder = os.path.join(derivatives_dir, 'fmriprep')
 behav_dir = os.path.join(data_dir, 'source_data/behav')
-work_dir = os.path.join(derivatives_dir, 'work_flows')
+work_dir = os.path.join(derivatives_dir, 'work_flows_phase2')
 if not os.path.exists(work_dir):
     os.makedirs(work_dir)
 output_dir = os.path.join(derivatives_dir, 'fMRI_analysis')
@@ -37,7 +36,7 @@ if not os.path.exists(output_dir):
 #%%
 participant_label = []
 run = []
-task = ['phase3']
+task = ['phase2']
 #task_label = "phase2"
 #['phase2','phase3']
 space = ['MNI152NLin2009cAsym']
