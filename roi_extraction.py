@@ -99,7 +99,7 @@ ref="/Users/xiaoqianxiao/.cache/templateflow/tpl-MNI152NLin2009cAsym/tpl-MNI152N
 for mask in $roi_dir/*.nii.gz; do
     base=$(basename "$mask" .nii.gz)
     flirt -in "$mask" -ref "$ref" -out "${roi_dir}/resampled/${base}.nii.gz" \
-          -applyxfm -init /Users/xiaoqianxiao/fsl/etc/flirtsch/ident.mat -interp nearestneighbour
+      -applyxfm -usesqform -interp nearestneighbour
 done
 
 #%%
