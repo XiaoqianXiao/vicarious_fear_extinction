@@ -146,6 +146,75 @@ def first_level_wf(in_files, output_dir, fwhm=6.0, brightness_threshold=1000):
     ])
     return workflow
 
+
+def SVC_wf(output_dir, name="SVC_wf"):
+    wf = pe.Workflow(name=name, base_dir=output_dir)
+    inputnode = Node(IdentityInterface(fields=['roi', 'cope_file', 'var_cope_file',
+                                               'design_file', 'grp_file', 'con_file', 'result_dir']),
+                     name='inputnode')
+
+    roi_node = Node(Function(input_names=['roi'], output_names=['roi_files'],
+                             function=get_roi_files),
+                    name='roi_node')
+
+    flameo = MapNode(FLAMEO(run_mode='flame1'),
+                     iterfield=['cope_file', 'var_cope_file', 'mask_file'],  # Add mask_file to iterfield
+                     name='flameo')
+
+    fdr_ztop = MapNode(ImageMaths(op_string='-ztop', suffix='_pval'),
+                       iterfield=['in_file'],
+                       name='fdr_ztop')
+
+    smoothness = MapNode(SmoothEstimate(),
+                         iterfield=['zstat_file', 'mask_file'],  # Add mask_file to iterfield
+                         name='smoothness')
+
+    clustering = MapNode(Cluster(threshold=2.3,  # Z-threshold (e.g., 2.3 or 3.1)
+                                 connectivity=26,  # 3D connectivity
+                                 out_threshold_file=True,
+                                 out_index_file=True,
+                                 out_localmax_txt_file=True,  # Local maxima text file
+                                 pthreshold=0.05),  # Cluster-level FWE threshold
+                         iterfield=['in_file', 'dlh'],
+                         name='clustering')
+
+    outputnode = Node(IdentityInterface(fields=['zstats', 'cluster_thresh', 'cluster_index', 'cluster_peaks']),
+                      name='outputnode')
+
+    datasink = Node(DataSink(base_directory=output_dir), name='datasink')
+
+    wf.connect([
+        (inputnode, roi_node, [('roi', 'roi')]),
+        # ROI files from roi_node
+        (roi_node, flameo, [('roi_files', 'mask_file')]),
+        (roi_node, smoothness, [('roi_files', 'mask_file')]),
+        # Inputs to flameo
+        (inputnode, flameo, [('cope_file', 'cope_file')]),  # Cope file as in_file
+        (inputnode, flameo, [('var_cope_file', 'var_cope_file')]),  # Varcope file as in_file
+        (inputnode, flameo, [('design_file', 'design_file'),
+                             ('grp_file', 'cov_split_file'),
+                             ('con_file', 't_con_file')]),
+
+        # Clustering with dlh
+        (flameo, clustering, [(('zstats', flatten_stats), 'in_file')]),
+        (smoothness, clustering, [('volume', 'volume')]),
+        (smoothness, clustering, [('dlh', 'dlh')]),
+
+        # Outputs to outputnode
+        (flameo, outputnode, [('zstats', 'zstats')]),
+        (clustering, outputnode, [('threshold_file', 'cluster_thresh'),
+                                  ('index_file', 'cluster_index'),
+                                  ('localmax_txt_file', 'cluster_peaks')]),
+
+        # Outputs to DataSink
+        (outputnode, datasink, [('zstats', 'stats.@zstats'),
+                                ('cluster_thresh', 'cluster_results.@thresh'),
+                                ('cluster_index', 'cluster_results.@index'),
+                                ('cluster_peaks', 'cluster_results.@peaks')])
+    ])
+    return wf
+
+
 def _bids2nipypeinfo(in_file, events_file, regressors_file,
                      regressors_names=None,
                      motion_columns=None,
@@ -216,3 +285,23 @@ def _neg(val):
 
 def _dict_ds(in_dict, sub, order=['bold', 'mask', 'events', 'regressors', 'tr']):
     return tuple([in_dict[sub][k] for k in order])
+
+def get_roi_files(roi):
+    import glob
+    import os
+    roi_dir = "/Users/xiaoqianxiao/tool/parcellation/ROIs"
+    roi_pattern = os.path.join(roi_dir, f'*{roi}*_resampled.nii*')  # Use *roi* to match variations
+    roi_files = glob.glob(roi_pattern)  # Expand wildcard into list of files
+    if not roi_files:
+        raise ValueError(f"No ROI files found matching pattern '{roi_pattern}' in {roi_dir}")
+    return roi_files
+
+def flatten_stats(stats):
+    """Flatten a potentially nested list of stat file paths into a single list."""
+    if not stats:
+        return []
+    if isinstance(stats, str):
+        return [stats]
+    if isinstance(stats[0], list):
+        return [item for sublist in stats for item in sublist]
+    return stats
