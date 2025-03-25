@@ -95,13 +95,12 @@ def needs_resampling(source_img, target_img):
 
 #%%
 roi_dir="/Users/xiaoqianxiao/tool/parcellation/ROIs"
-ref="/Users/xiaoqianxiao/.cache/templateflow/tpl-MNI152NLin2009cAsym/tpl-MNI152NLin2009cAsym_res-02_desc-brain_mask.nii.gz"
+ref="/Users/xiaoqianxiao/.cache/templateflow/tpl-MNI152NLin2009cAsym/tpl-MNI152NLin2009cAsym_res-02_desc-brain_T1w.nii.gz"
 for mask in $roi_dir/*.nii.gz; do
     base=$(basename "$mask" .nii.gz)
     flirt -in "$mask" -ref "$ref" -out "${roi_dir}/resampled/${base}.nii.gz" \
       -applyxfm -usesqform -interp nearestneighbour
 done
-
 #%%
 import os
 import nibabel as nib
@@ -179,3 +178,4 @@ for task in tasks:
 df = pd.DataFrame(all_extracted_data)
 df.to_csv(output_csv, index=False)
 print(f"Results saved to {output_csv}")
+
