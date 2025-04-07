@@ -1,45 +1,104 @@
 from nipype.pipeline import engine as pe
 from nipype.algorithms.modelgen import SpecifyModel
 from nipype.interfaces import fsl, utility as niu, io as nio
-from nipype.interfaces.fsl import SUSAN
-from nipype.interfaces.io import DataSink
+from nipype.interfaces.fsl.utils import ImageMeants
+from nipype.interfaces.fsl import SUSAN, ApplyMask, FLIRT, FILMGLS, Level1Design, FEATModel
 from niworkflows.interfaces.bids import DerivativesDataSink as BIDSDerivatives
-from interfaces import PtoZ
+import numpy as np
+import os
 from utils import _dict_ds
-from nipype.interfaces.fsl import ApplyMask
 
 class DerivativesDataSink(BIDSDerivatives):
     out_path_base = 'firstLevel'
 
 DATA_ITEMS = ['bold', 'mask', 'events', 'regressors', 'tr']
 
-def first_level_wf(in_files, output_dir, fwhm=6.0, brightness_threshold=1000):
+def first_level_wf_roi(in_files, output_dir, roi_masks, fwhm=6.0, brightness_threshold=1000):
+    if not os.path.isabs(output_dir):
+        output_dir = os.path.abspath(output_dir)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
     workflow = pe.Workflow(name='wf_1st_level')
     workflow.config['execution']['use_relative_paths'] = True
     workflow.config['execution']['remove_unnecessary_outputs'] = False
+
+    def text_to_nifti(ts_file, out_file='roi_ts.nii.gz'):
+        import numpy as np
+        import nibabel as nib
+        import os
+        out_file = os.path.abspath(out_file)
+        ts_data = np.loadtxt(ts_file)
+        nifti_data = ts_data.reshape(1, 1, 1, -1)
+        affine = np.eye(4)
+        img = nib.Nifti1Image(nifti_data, affine)
+        nib.save(img, out_file)
+        return out_file
+
+    def get_contrast_indices(n_contrasts):
+        return list(range(1, n_contrasts + 1))
+
+    def get_roi_label(roi_file):
+        import os
+        label = os.path.splitext(os.path.basename(roi_file))[0].replace('_flirt.nii', '')
+        print(f"ROI Label: {label}")  # Debug print
+        return label
+
+    def get_subject_id(bold_file):
+        import os
+        filename = os.path.basename(bold_file)
+        subject = filename.split('_')[0].replace('sub-', '')
+        print(f"Subject ID: {subject}")  # Debug print
+        return subject
+
+    def get_session_id(bold_file):
+        import os
+        filename = os.path.basename(bold_file)
+        for part in filename.split('_'):
+            if part.startswith('ses-'):
+                return part.replace('ses-', '')
+        return 'nosession'
+
+    def get_space_id(bold_file):
+        import os
+        filename = os.path.basename(bold_file)
+        for part in filename.split('_'):
+            if part.startswith('space-'):
+                return part.replace('space-', '')
+        return 'nospace'
+
+    def get_base_directory(output_dir, roi_label):
+        """Dynamically set base_directory to include ROI label."""
+        import os
+        return os.path.join(output_dir, roi_label)
 
     datasource = pe.Node(niu.Function(function=_dict_ds, output_names=DATA_ITEMS),
                          name='datasource')
     datasource.inputs.in_dict = in_files
     datasource.iterables = ('sub', sorted(in_files.keys()))
 
-    # Extract motion parameters from regressors file
     runinfo = pe.Node(niu.Function(
         input_names=['in_file', 'events_file', 'regressors_file', 'regressors_names'],
         function=_bids2nipypeinfo, output_names=['info', 'realign_file']),
         name='runinfo')
-
-    # Set the column names to be used from the confounds file
     runinfo.inputs.regressors_names = ['dvars', 'framewise_displacement'] + \
                                       ['a_comp_cor_%02d' % i for i in range(6)] + \
                                       ['cosine%02d' % i for i in range(4)]
 
-    # Mask
     apply_mask = pe.Node(ApplyMask(), name='apply_mask')
-    # SUSAN smoothing
     susan = pe.Node(SUSAN(), name='susan')
     susan.inputs.fwhm = fwhm
     susan.inputs.brightness_threshold = brightness_threshold
+
+    resample_rois = pe.Node(FLIRT(interp='nearestneighbour'), name='resample_rois')
+    resample_rois.iterables = ('in_file', roi_masks)
+
+    roi_means = pe.Node(ImageMeants(), name='roi_means')
+
+    ts_to_nifti = pe.Node(niu.Function(
+        input_names=['ts_file'],
+        output_names=['out_file'],
+        function=text_to_nifti), name='ts_to_nifti')
 
     l1_spec = pe.Node(SpecifyModel(
         parameter_source='FSL',
@@ -47,173 +106,139 @@ def first_level_wf(in_files, output_dir, fwhm=6.0, brightness_threshold=1000):
         high_pass_filter_cutoff=100
     ), name='l1_spec')
 
-    # l1_model creates a first-level model design
-    l1_model = pe.Node(fsl.Level1Design(
+    l1_model = pe.Node(Level1Design(
         bases={'dgamma': {'derivs': True}},
         model_serial_correlations=True,
-        contrasts=[('CS+_safe>CS-', 'T', ['CSS_first_half', 'CSS_second_half', 'CS-_first_half', 'CS-_second_half'], [0.5, 0.5, -0.5, -0.5]),
-                   ('CS+_safe<CS-', 'T', ['CSS_first_half', 'CSS_second_half', 'CS-_first_half', 'CS-_second_half'], [-0.5, -0.5, 0.5, 0.5]),
-                   ('CS+_reinf>CS-', 'T', ['CSR_first_half', 'CSR_second_half', 'CS-_first_half', 'CS-_second_half'], [0.5, 0.5, -0.5, -0.5]),
-                   ('CS+_reinf<CS-', 'T', ['CSR_first_half', 'CSR_second_half', 'CS-_first_half', 'CS-_second_half'], [-0.5, -0.5, 0.5, 0.5]),
-                   ('CS+_safe>CS+_reinf', 'T', ['CSS_first_half', 'CSS_second_half', 'CSR_first_half', 'CSR_second_half'], [0.5, 0.5, -0.5, -0.5]),
-                   ('CS+_safe<CS+_reinf', 'T', ['CSS_first_half', 'CSS_second_half', 'CSR_first_half', 'CSR_second_half'], [-0.5, -0.5, 0.5, 0.5]),
-                   ('CS->FIXATION', 'T', ['CS-_first_half', 'CS-_second_half', 'FIXATION_second_half', 'FIXATION_second_half'], [0.5, 0.5, -0.5, -0.5]),
-                   ('CS+_safe>FIXATION', 'T', ['CSS_first_half', 'CSS_second_half', 'FIXATION_first_half', 'FIXATION_second_half'], [0.5, 0.5, -0.5, -0.5]),
-                   ('CS+_reinf>FIXATION', 'T', ['CSR_first_half', 'CSR_second_half', 'FIXATION_first_half', 'FIXATION_second_half'], [0.5, 0.5, -0.5, -0.5]),
-                   ('first_half_CS+_safe>first_half_CS+_reinf', 'T', ['CSS_first_half', 'CSR_first_half'], [1, -1]),
-                   ('first_half_CS+_safe<first_half_CS+_reinf', 'T', ['CSS_first_half', 'CSR_first_half'], [-1, 1]),
-                   ('first_half_CS+_safe>CS-', 'T', ['CSS_first_half', 'CS-_first_half'], [1, -1]),
-                   ('first_half_CS+_safe<CS-', 'T', ['CSS_first_half', 'CS-_first_half'], [-1, 1]),
-                   ('first_half_CS+_reinf>CS-', 'T', ['CSR_first_half', 'CS-_first_half'], [1, -1]),
-                   ('first_half_CS+_reinf<CS-', 'T', ['CSR_first_half', 'CS-_first_half'], [-1, 1]),
-                   ('first_half_CS+_safe>FIXATION', 'T', ['CSS_first_half', 'FIXATION_first_half'], [1, -1]),
-                   ('first_half_CS+_reinf>FIXATION', 'T', ['CSR_first_half', 'FIXATION_first_half'], [1, -1]),
-                   ('second_half_CS+_safe>second_half_CS+_reinf', 'T', ['CSS_second_half', 'CSR_second_half'], [1, -1]),
-                   ('second_half_CS+_safe<second_half_CS+_reinf', 'T', ['CSS_second_half', 'CSR_second_half'], [-1, 1]),
-                   ('second_half_CS+_safe>CS-', 'T', ['CSS_second_half', 'CS-_second_half'], [1, -1]),
-                   ('second_half_CS+_safe<CS-', 'T', ['CSS_second_half', 'CS-_second_half'], [-1, 1]),
-                   ('second_half_CS+_reinf>CS-', 'T', ['CSR_second_half', 'CS-_second_half'], [1, -1]),
-                   ('second_half_CS+_reinf<CS-', 'T', ['CSR_second_half', 'CS-_second_half'], [-1, 1]),
-                   ('second_half_CS+_safe>FIXATION', 'T', ['CSS_second_half', 'FIXATION_second_half'], [1, -1]),
-                   ('second_half_CS+_reinf>FIXATION', 'T', ['CSR_second_half', 'FIXATION_second_half'], [1, -1]),
-                   ('first_half_CS+_safe>second_half_CS+_safe', 'T', ['CSS_first_half', 'CSS_second_half'], [1, -1]),
-                   ('first_half_CS+_safe<second_half_CS+_safe', 'T', ['CSS_first_half', 'CSS_second_half'], [-1, 1]),
-                   ('first_half_CS+_reinf>second_half_CS+_reinf', 'T', ['CSR_first_half', 'CSR_second_half'], [1, -1]),
-                   ('first_half_CS+_reinf<second_half_CS+_reinf', 'T', ['CSR_first_half', 'CSR_second_half'], [-1, 1])
-                   ],
+        contrasts=[
+            ('CS+_safe>CS-', 'T', ['CSS_first_half', 'CSS_second_half', 'CS-_first_half', 'CS-_second_half'], [0.5, 0.5, -0.5, -0.5]),
+            ('CS+_reinf>CS-', 'T', ['CSR_first_half', 'CSR_second_half', 'CS-_first_half', 'CS-_second_half'], [0.5, 0.5, -0.5, -0.5]),
+            ('CS+_safe>CS+_reinf', 'T', ['CSS_first_half', 'CSS_second_half', 'CSR_first_half', 'CSR_second_half'], [0.5, 0.5, -0.5, -0.5]),
+            ('CS->FIXATION', 'T', ['CS-_first_half', 'CS-_second_half', 'FIXATION_first_half', 'FIXATION_second_half'], [0.5, 0.5, -0.5, -0.5]),
+            ('CS+_safe>FIXATION', 'T', ['CSS_first_half', 'CSS_second_half', 'FIXATION_first_half', 'FIXATION_second_half'], [0.5, 0.5, -0.5, -0.5]),
+            ('CS+_reinf>FIXATION', 'T', ['CSR_first_half', 'CSR_second_half', 'FIXATION_first_half', 'FIXATION_second_half'], [0.5, 0.5, -0.5, -0.5]),
+            ('first_half_CS+_safe>first_half_CS+_reinf', 'T', ['CSS_first_half', 'CSR_first_half'], [1, -1]),
+            ('first_half_CS+_safe>CS-', 'T', ['CSS_first_half', 'CS-_first_half'], [1, -1]),
+            ('first_half_CS+_reinf>CS-', 'T', ['CSR_first_half', 'CS-_first_half'], [1, -1]),
+            ('first_half_CS+_safe>FIXATION', 'T', ['CSS_first_half', 'FIXATION_first_half'], [1, -1]),
+            ('first_half_CS+_reinf>FIXATION', 'T', ['CSR_first_half', 'FIXATION_first_half'], [1, -1]),
+            ('second_half_CS+_safe>second_half_CS+_reinf', 'T', ['CSS_second_half', 'CSR_second_half'], [1, -1]),
+            ('second_half_CS+_safe>CS-', 'T', ['CSS_second_half', 'CS-_second_half'], [1, -1]),
+            ('second_half_CS+_reinf>CS-', 'T', ['CSR_second_half', 'CS-_second_half'], [1, -1]),
+            ('second_half_CS+_safe>FIXATION', 'T', ['CSS_second_half', 'FIXATION_second_half'], [1, -1]),
+            ('second_half_CS+_reinf>FIXATION', 'T', ['CSR_second_half', 'FIXATION_second_half'], [1, -1]),
+            ('first_half_CS+_safe>second_half_CS+_safe', 'T', ['CSS_first_half', 'CSS_second_half'], [1, -1]),
+            ('first_half_CS+_reinf>second_half_CS+_reinf', 'T', ['CSR_first_half', 'CSR_second_half'], [1, -1])
+        ]
     ), name='l1_model')
 
-    # feat_spec generates an fsf model specification file
-    feat_spec = pe.Node(fsl.FEATModel(), name='feat_spec')
-    # feat_fit actually runs FEAT
-    feat_fit = pe.Node(fsl.FEAT(), name='feat_fit', mem_gb=12)
-    feat_select = pe.Node(nio.SelectFiles({
-        **{f'cope{i}': f'stats/cope{i}.nii.gz' for i in range(1, 26)},
-        **{f'varcope{i}': f'stats/varcope{i}.nii.gz' for i in range(1, 26)}
-    }), name='feat_select')
+    feat_model = pe.Node(FEATModel(), name='feat_model')
 
-    ds_copes = [
-        pe.Node(DerivativesDataSink(
-            base_directory=str(output_dir), keep_dtype=False, desc=f'cope{i}'),
-            name=f'ds_cope{i}', run_without_submitting=True)
-        for i in range(1, 26)
-    ]
+    film_gls = pe.Node(FILMGLS(
+        threshold=0,
+        smooth_autocorr=True,
+        autocorr_noestimate=False
+    ), name='film_gls')
 
-    ds_varcopes = [
-        pe.Node(DerivativesDataSink(
-            base_directory=str(output_dir), keep_dtype=False, desc=f'varcope{i}'),
-            name=f'ds_varcope{i}', run_without_submitting=True)
-        for i in range(1, 26)
-    ]
+    contrast_indices = pe.Node(niu.Function(
+        input_names=['n_contrasts'],
+        output_names=['contrast_indices'],
+        function=get_contrast_indices),
+        name='contrast_indices')
+    contrast_indices.inputs.n_contrasts = 18
+
+    roi_label = pe.Node(niu.Function(
+        input_names=['roi_file'],
+        output_names=['roi_label'],
+        function=get_roi_label),
+        name='roi_label')
+
+    subject_id = pe.Node(niu.Function(
+        input_names=['bold_file'],
+        output_names=['subject_id'],
+        function=get_subject_id),
+        name='subject_id')
+
+    session_id = pe.Node(niu.Function(
+        input_names=['bold_file'],
+        output_names=['session_id'],
+        function=get_session_id),
+        name='session_id')
+
+    space_id = pe.Node(niu.Function(
+        input_names=['bold_file'],
+        output_names=['space_id'],
+        function=get_space_id),
+        name='space_id')
+
+    # Function to dynamically set base_directory
+    base_dir_node = pe.Node(niu.Function(
+        input_names=['output_dir', 'roi_label'],
+        output_names=['base_directory'],
+        function=get_base_directory),
+        name='base_dir_node')
+    base_dir_node.inputs.output_dir = output_dir
+
+    # DerivativesDataSink nodes for copes (one per contrast, per ROI)
+    ds_copes = [pe.Node(DerivativesDataSink(
+        keep_dtype=False,
+        desc=f'cope{i}',
+        extension='.nii.gz'),
+        name=f'ds_cope{i}', run_without_submitting=True) for i in range(1, 19)]
+
+    # Select nodes for each cope file
+    cope_selects = [pe.Node(niu.Select(index=i-1), name=f'cope_select_{i}') for i in range(1, 19)]
+
+    # DerivativesDataSink for source file (per ROI)
+    ds_source = pe.Node(DerivativesDataSink(
+        keep_dtype=False,
+        desc='source',
+        extension='.nii.gz'),
+        name='ds_source', run_without_submitting=True)
 
     workflow.connect([
-        (datasource, apply_mask, [('bold', 'in_file'),
-                                  ('mask', 'mask_file')]),
+        (datasource, apply_mask, [('bold', 'in_file'), ('mask', 'mask_file')]),
         (apply_mask, susan, [('out_file', 'in_file')]),
-        (datasource, runinfo, [
-            ('events', 'events_file'),
-            ('regressors', 'regressors_file')]),
-        *[
-            (datasource, ds_copes[i - 1], [('bold', 'source_file')])
-            for i in range(1, 26)
-        ],
-        *[
-            (datasource, ds_varcopes[i - 1], [('bold', 'source_file')])
-            for i in range(1, 26)
-        ],
+        (datasource, runinfo, [('events', 'events_file'), ('regressors', 'regressors_file')]),
+        (susan, resample_rois, [('smoothed_file', 'reference')]),
+        (susan, roi_means, [('smoothed_file', 'in_file')]),
+        (resample_rois, roi_means, [('out_file', 'mask')]),
+        (susan, runinfo, [('smoothed_file', 'in_file')]),
+        (roi_means, ts_to_nifti, [('out_file', 'ts_file')]),
+        (ts_to_nifti, film_gls, [('out_file', 'in_file')]),
         (susan, l1_spec, [('smoothed_file', 'functional_runs')]),
         (datasource, l1_spec, [('tr', 'time_repetition')]),
-        (datasource, l1_model, [('tr', 'interscan_interval')]),
-        (susan, runinfo, [('smoothed_file', 'in_file')]),
-        (runinfo, l1_spec, [
-            ('info', 'subject_info'),
-            ('realign_file', 'realignment_parameters')]),
+        (runinfo, l1_spec, [('info', 'subject_info'),
+                            ('realign_file', 'realignment_parameters')]),
         (l1_spec, l1_model, [('session_info', 'session_info')]),
-        (l1_model, feat_spec, [
-            ('fsf_files', 'fsf_file'),
-            ('ev_files', 'ev_files')]),
-        (l1_model, feat_fit, [('fsf_files', 'fsf_file')]),
-        # Added connection to ensure feat_select runs after feat_fit
-        (feat_fit, feat_select, [('feat_dir', 'base_directory')]),
-        *[
-            (feat_select, ds_copes[i - 1], [(f'cope{i}', 'in_file')])
-            for i in range(1, 26)
-        ],
-        *[
-            (feat_select, ds_varcopes[i - 1], [(f'varcope{i}', 'in_file')])
-            for i in range(1, 26)
-        ],
+        (datasource, l1_model, [('tr', 'interscan_interval')]),
+        (l1_model, feat_model, [('fsf_files', 'fsf_file'),
+                                ('ev_files', 'ev_files')]),
+        (feat_model, film_gls, [('design_file', 'design_file'),
+                                ('con_file', 'tcon_file')]),
+        (datasource, subject_id, [('bold', 'bold_file')]),
+        (datasource, session_id, [('bold', 'bold_file')]),
+        (datasource, space_id, [('bold', 'bold_file')]),
+        (resample_rois, roi_label, [('out_file', 'roi_file')]),
+        # Connect ROI label to base_directory node
+        (roi_label, base_dir_node, [('roi_label', 'roi_label')]),
+        # Connect copes through Select nodes to DerivativesDataSink
+        *[(film_gls, cope_selects[i-1], [('copes', 'inlist')]) for i in range(1, 19)],
+        *[(cope_selects[i-1], ds_copes[i-1], [('out', 'in_file')]) for i in range(1, 19)],
+        *[(datasource, ds_copes[i-1], [('bold', 'source_file')]) for i in range(1, 19)],
+        *[(subject_id, ds_copes[i-1], [('subject_id', 'subject')]) for i in range(1, 19)],
+        *[(session_id, ds_copes[i-1], [('session_id', 'session')]) for i in range(1, 19)],
+        *[(space_id, ds_copes[i-1], [('space_id', 'space')]) for i in range(1, 19)],
+        *[(base_dir_node, ds_copes[i-1], [('base_directory', 'base_directory')]) for i in range(1, 19)],
+        # Connect source to DerivativesDataSink
+        (susan, ds_source, [('smoothed_file', 'in_file')]),
+        (datasource, ds_source, [('bold', 'source_file')]),
+        (subject_id, ds_source, [('subject_id', 'subject')]),
+        (session_id, ds_source, [('session_id', 'session')]),
+        (space_id, ds_source, [('space_id', 'space')]),
+        (base_dir_node, ds_source, [('base_directory', 'base_directory')]),
     ])
+
     return workflow
-
-
-def SVC_wf(output_dir, name="SVC_wf"):
-    wf = pe.Workflow(name=name, base_dir=output_dir)
-    inputnode = Node(IdentityInterface(fields=['roi', 'cope_file', 'var_cope_file',
-                                               'design_file', 'grp_file', 'con_file', 'result_dir']),
-                     name='inputnode')
-
-    roi_node = Node(Function(input_names=['roi'], output_names=['roi_files'],
-                             function=get_roi_files),
-                    name='roi_node')
-
-    flameo = MapNode(FLAMEO(run_mode='flame1'),
-                     iterfield=['cope_file', 'var_cope_file', 'mask_file'],  # Add mask_file to iterfield
-                     name='flameo')
-
-    fdr_ztop = MapNode(ImageMaths(op_string='-ztop', suffix='_pval'),
-                       iterfield=['in_file'],
-                       name='fdr_ztop')
-
-    smoothness = MapNode(SmoothEstimate(),
-                         iterfield=['zstat_file', 'mask_file'],  # Add mask_file to iterfield
-                         name='smoothness')
-
-    clustering = MapNode(Cluster(threshold=2.3,  # Z-threshold (e.g., 2.3 or 3.1)
-                                 connectivity=26,  # 3D connectivity
-                                 out_threshold_file=True,
-                                 out_index_file=True,
-                                 out_localmax_txt_file=True,  # Local maxima text file
-                                 pthreshold=0.05),  # Cluster-level FWE threshold
-                         iterfield=['in_file', 'dlh'],
-                         name='clustering')
-
-    outputnode = Node(IdentityInterface(fields=['zstats', 'cluster_thresh', 'cluster_index', 'cluster_peaks']),
-                      name='outputnode')
-
-    datasink = Node(DataSink(base_directory=output_dir), name='datasink')
-
-    wf.connect([
-        (inputnode, roi_node, [('roi', 'roi')]),
-        # ROI files from roi_node
-        (roi_node, flameo, [('roi_files', 'mask_file')]),
-        (roi_node, smoothness, [('roi_files', 'mask_file')]),
-        # Inputs to flameo
-        (inputnode, flameo, [('cope_file', 'cope_file')]),  # Cope file as in_file
-        (inputnode, flameo, [('var_cope_file', 'var_cope_file')]),  # Varcope file as in_file
-        (inputnode, flameo, [('design_file', 'design_file'),
-                             ('grp_file', 'cov_split_file'),
-                             ('con_file', 't_con_file')]),
-
-        # Clustering with dlh
-        (flameo, clustering, [(('zstats', flatten_stats), 'in_file')]),
-        (smoothness, clustering, [('volume', 'volume')]),
-        (smoothness, clustering, [('dlh', 'dlh')]),
-
-        # Outputs to outputnode
-        (flameo, outputnode, [('zstats', 'zstats')]),
-        (clustering, outputnode, [('threshold_file', 'cluster_thresh'),
-                                  ('index_file', 'cluster_index'),
-                                  ('localmax_txt_file', 'cluster_peaks')]),
-
-        # Outputs to DataSink
-        (outputnode, datasink, [('zstats', 'stats.@zstats'),
-                                ('cluster_thresh', 'cluster_results.@thresh'),
-                                ('cluster_index', 'cluster_results.@index'),
-                                ('cluster_peaks', 'cluster_results.@peaks')])
-    ])
-    return wf
-
 
 def _bids2nipypeinfo(in_file, events_file, regressors_file,
                      regressors_names=None,
@@ -223,10 +248,11 @@ def _bids2nipypeinfo(in_file, events_file, regressors_file,
     import numpy as np
     import pandas as pd
     from nipype.interfaces.base.support import Bunch
+    import sys
 
-    # Process the events file with tab separator (fix for BIDS TSV files)
-    events = pd.read_csv(events_file, sep='\t')  # Changed from sep=',' to sep='\t'
+    print(f"_bids2nipypeinfo: events_file={events_file}, type={type(events_file)}, regressors_file={regressors_file}, type={type(regressors_file)}", file=sys.stdout, flush=True)
 
+    events = pd.read_csv(events_file, sep='\t')
     bunch_fields = ['onsets', 'durations', 'amplitudes']
 
     if not motion_columns:
@@ -251,7 +277,6 @@ def _bids2nipypeinfo(in_file, events_file, regressors_file,
 
     for condition in runinfo.conditions:
         event = events[events.trial_type.str.match(condition)]
-
         runinfo.onsets.append(np.round(event.onset.values, 3).tolist())
         runinfo.durations.append(np.round(event.duration.values, 3).tolist())
         if 'amplitudes' in events.columns:
@@ -264,44 +289,8 @@ def _bids2nipypeinfo(in_file, events_file, regressors_file,
         try:
             runinfo.regressors = regress_data[regressors_names]
         except KeyError:
-            regressors_names = list(set(regressors_names).intersection(
-                set(regress_data.columns)))
+            regressors_names = list(set(regressors_names).intersection(set(regress_data.columns)))
             runinfo.regressors = regress_data[regressors_names]
         runinfo.regressors = runinfo.regressors.fillna(0.0).values.T.tolist()
 
     return [runinfo], str(out_motion)
-
-def _get_tr(in_dict):
-    return in_dict.get('RepetitionTime')
-
-def _len(inlist):
-    return len(inlist)
-
-def _dof(inlist):
-    return len(inlist) - 1
-
-def _neg(val):
-    return -val
-
-def _dict_ds(in_dict, sub, order=['bold', 'mask', 'events', 'regressors', 'tr']):
-    return tuple([in_dict[sub][k] for k in order])
-
-def get_roi_files(roi):
-    import glob
-    import os
-    roi_dir = "/Users/xiaoqianxiao/tool/parcellation/ROIs"
-    roi_pattern = os.path.join(roi_dir, f'*{roi}*_resampled.nii*')  # Use *roi* to match variations
-    roi_files = glob.glob(roi_pattern)  # Expand wildcard into list of files
-    if not roi_files:
-        raise ValueError(f"No ROI files found matching pattern '{roi_pattern}' in {roi_dir}")
-    return roi_files
-
-def flatten_stats(stats):
-    """Flatten a potentially nested list of stat file paths into a single list."""
-    if not stats:
-        return []
-    if isinstance(stats, str):
-        return [stats]
-    if isinstance(stats[0], list):
-        return [item for sublist in stats for item in sublist]
-    return stats

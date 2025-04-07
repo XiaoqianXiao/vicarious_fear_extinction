@@ -125,7 +125,8 @@ def extract_cope_from_rois(cope_file, roi_dir, task, contrast, extracted_data):
 
     # Iterate over ROI files in the directory
     for roi_file in os.listdir(roi_dir):
-        if roi_file.endswith('mask.nii.gz'):
+        #if roi_file.endswith('mask.nii.gz'):
+        if roi_file.endswith('.nii.gz'):
             roi_path = os.path.join(roi_dir, roi_file)
             roi_img = nib.load(roi_path)
             roi_data = roi_img.get_fdata()
@@ -156,8 +157,9 @@ project_name = 'NARSAD'
 data_dir = os.path.join(root_dir, project_name, 'MRI')
 derivatives_dir = os.path.join(data_dir, 'derivatives')
 results_dir = os.path.join(derivatives_dir, 'fMRI_analysis/groupLevel')
-roi_dir = "/Users/xiaoqianxiao/tool/parcellation/ROIs/resampled"
-output_csv = os.path.join(results_dir, 'roi_cope_results_all.csv')  # Single output file
+#roi_dir = "/Users/xiaoqianxiao/tool/parcellation/ROIs/resampled"
+roi_dir = "/Users/xiaoqianxiao/tool/parcellation/ROIs/Gillian_NARSAD/resampled"
+output_csv = os.path.join(results_dir, 'roi_cope_results_Gillian.csv')  # Single output file
 
 tasks = ['phase2', 'phase3']
 contr_list = list(range(1, 26))

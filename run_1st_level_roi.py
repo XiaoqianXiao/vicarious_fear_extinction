@@ -1,0 +1,103 @@
+#%%
+import os, json
+from bids.layout import BIDSLayout
+from templateflow.api import get as tpl_get, templates as get_tpl_list
+import pandas as pd
+import nipype.pipeline.engine as pe
+import nipype.interfaces.utility as niu
+#%%
+os.environ['FSLOUTPUTTYPE'] = 'NIFTI_GZ'
+os.environ['FSLDIR'] = '/Users/xiaoqianxiao/fsl'  # Adjust this according to your FSL installation
+os.environ['PATH'] += os.pathsep + os.path.join(os.environ['FSLDIR'], 'bin')
+plugin_settings = {
+    'plugin': 'MultiProc',
+    'plugin_args': {
+        'n_procs': 2,
+        'raise_insufficient': False,
+        'maxtasksperchild': 1,
+    }
+}
+
+#%%
+root_dir = '/Users/xiaoqianxiao/projects'
+project_name = 'NARSAD'
+data_dir = os.path.join(root_dir, project_name, 'MRI')
+bids_dir = data_dir
+derivatives_dir = os.path.join(data_dir, 'derivatives')
+fmriprep_folder = os.path.join(derivatives_dir, 'fmriprep')
+behav_dir = os.path.join(data_dir, 'source_data/behav')
+#%%
+participant_label = []
+run = []
+task = ['phase3']
+work_dir = os.path.join(derivatives_dir, f'work_flows/firstLevel_roi/{task[0]}')
+if not os.path.exists(work_dir):
+    os.makedirs(work_dir)
+output_dir = os.path.join(derivatives_dir, 'fMRI_analysis_roi')
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+space = ['MNI152NLin2009cAsym']
+layout = BIDSLayout(str(bids_dir), validate=False, derivatives=str(derivatives_dir))
+subjects = layout.get(target='subject', return_type='id')
+sessions = layout.get(target='session', return_type='id')
+runs = layout.get(target='run', return_type='id')
+#%%
+query = {'desc': 'preproc',
+         'suffix': 'bold',
+         #'subject': ['N246', 'N247', 'N248', 'N249', 'N250', 'N251', 'N252', 'N253', 'N254', 'N255', 'N257', 'N258', 'N259', 'N260'],
+         'extension': ['.nii', '.nii.gz']}
+if participant_label:
+    query['subject'] = '|'.join(participant_label)
+if run:
+    query['run'] = '|'.join(run)
+if task:
+    query['task'] = '|'.join(task)
+if space:
+    query['space'] = '|'.join(space)
+prepped_bold = layout.get(**query)
+if not prepped_bold:
+    print(f'No preprocessed files found under the given derivatives '
+          'folder: {derivatives_dir}.')
+entities = prepped_bold[0].entities
+#%%
+import glob
+roi_dir = "/Users/xiaoqianxiao/tool/parcellation/ROIs/Gillian_NARSAD/resampled"
+roi_files = glob.glob(os.path.join(roi_dir, "*.nii*"))
+#%%
+if __name__ == "__main__":
+    for part in prepped_bold:
+        from workflows import first_level_wf_roi
+        base_entities = set(['subject', 'task'])
+        inputs = {}
+        entities = part.entities
+        sub = entities['subject']
+        task = entities['task']
+        if (sub == 'N202') & (task == 'phase3'):
+            events_file = os.path.join(behav_dir, 'task-NARSAD_phase-3_sub-202_half_events.csv')
+        else:
+            events_file = os.path.join(behav_dir, 'task-Narsad_'+task+'_half_events.csv')
+        session = entities['session']
+        inputs[sub] = {}
+        base = base_entities.intersection(entities)
+        subquery = {k: v for k, v in entities.items() if k in base}
+        inputs[sub]['bold'] = part.path
+        inputs[sub]['mask'] = layout.get(suffix='mask',
+                                            return_type='file',
+                                            extension=['.nii', '.nii.gz'],
+                                            space=query['space'],
+                                            **subquery)[0]
+        inputs[sub]['regressors'] = layout.get(desc='confounds',
+                                                return_type='file',
+                                                extension=['.tsv'],
+                                                **subquery)[0]
+        inputs[sub]['tr'] = entities['RepetitionTime']
+        #inputs[sub]['events'] = layout.get(suffix='events',
+        #                                   return_type='file', **subquery)[0]
+        inputs[sub]['events'] = events_file
+        #print(inputs)
+        workflow = first_level_wf_roi(inputs, output_dir, roi_masks=roi_files)
+        #workflow = first_level_wf_roi(inputs, output_dir, roi_dir=roi_dir)
+        workflow.base_dir = os.path.join(work_dir, f'sub_{sub}')
+        workflow.run(**plugin_settings)
+
+
